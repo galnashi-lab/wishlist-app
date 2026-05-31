@@ -18,7 +18,7 @@ export default async function WishlistPage({
 }: {
   params: { id: string };
 }) {
-  console.log('WishlistPage :', params);
+  console.log('WishlistPage :', params.id);
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
 
