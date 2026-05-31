@@ -3,6 +3,7 @@ import Google from "next-auth/providers/google";
 
 // Lightweight config for Edge-compatible middleware (no Prisma)
 export const authConfig: NextAuthConfig = {
+  trustHost: true,
   providers: [Google],
   pages: {
     signIn: "/login",
