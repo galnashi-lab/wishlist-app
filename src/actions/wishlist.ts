@@ -39,11 +39,78 @@ export async function createWishlist(formData: FormData) {
 
 export async function getWishlists() {
   const user = await requireAuth();
-  return prisma.wishlist.findMany({
-    where: { ownerId: user.id! },
-    include: { _count: { select: { items: true } } },
-    orderBy: { createdAt: "desc" },
+  const email = user.email ?? "";
+
+  const [owned, shared] = await Promise.all([
+    prisma.wishlist.findMany({
+      where: { ownerId: user.id! },
+      include: { _count: { select: { items: true } } },
+      orderBy: { createdAt: "desc" },
+    }),
+    prisma.wishlist.findMany({
+      where: { shares: { some: { email } } },
+      include: { _count: { select: { items: true } }, owner: { select: { name: true, email: true } } },
+      orderBy: { createdAt: "desc" },
+    }),
+  ]);
+
+  return { owned, shared };
+}
+
+// ─── Sharing ──────────────────────────────────────────────────────────────────
+
+export async function shareWishlist(wishlistId: string, email: string) {
+  const user = await requireAuth();
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) throw new Error("Email is required");
+  if (normalized === user.email?.toLowerCase()) throw new Error("You already own this list");
+
+  // Verify the requester owns the wishlist
+  const wishlist = await prisma.wishlist.findUnique({ where: { id: wishlistId } });
+  if (!wishlist || wishlist.ownerId !== user.id) throw new Error("Not authorized");
+
+  await prisma.wishlistShare.upsert({
+    where: { wishlistId_email: { wishlistId, email: normalized } },
+    update: {},
+    create: { wishlistId, email: normalized },
   });
+
+  revalidatePath(`/wishlist/${wishlistId}`);
+}
+
+export async function removeShare(wishlistId: string, email: string) {
+  const user = await requireAuth();
+  const wishlist = await prisma.wishlist.findUnique({ where: { id: wishlistId } });
+  if (!wishlist || wishlist.ownerId !== user.id) throw new Error("Not authorized");
+
+  await prisma.wishlistShare.delete({
+    where: { wishlistId_email: { wishlistId, email } },
+  });
+
+  revalidatePath(`/wishlist/${wishlistId}`);
+}
+
+export async function getWishlistShares(wishlistId: string) {
+  const user = await requireAuth();
+  const wishlist = await prisma.wishlist.findUnique({ where: { id: wishlistId } });
+  if (!wishlist || wishlist.ownerId !== user.id) return [];
+
+  return prisma.wishlistShare.findMany({
+    where: { wishlistId },
+    orderBy: { createdAt: "asc" },
+  });
+}
+
+export async function canAccessWishlist(wishlistId: string): Promise<boolean> {
+  const session = await auth();
+  if (!session?.user?.id) return false;
+  const wishlist = await prisma.wishlist.findUnique({
+    where: { id: wishlistId },
+    include: { shares: true },
+  });
+  if (!wishlist) return false;
+  if (wishlist.ownerId === session.user.id) return true;
+  return wishlist.shares.some((s) => s.email === session.user?.email?.toLowerCase());
 }
 
 // ─── URL Metadata Fetching ────────────────────────────────────────────────────

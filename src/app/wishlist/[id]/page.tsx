@@ -2,10 +2,10 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
 import AddItemForm from "@/components/AddItemForm";
 import WishlistBoard from "@/components/WishlistBoard";
 import RefreshAllButton from "@/components/RefreshAllButton";
+import SharePanel from "@/components/SharePanel";
 import { Category } from "@prisma/client";
 
 const CATEGORY_LABELS: Record<Category, string> = {
@@ -28,18 +28,24 @@ export default async function WishlistPage({
     include: {
       items: { orderBy: { rank: "asc" } },
       owner: { select: { name: true } },
+      shares: { orderBy: { createdAt: "asc" } },
     },
   });
 
   if (!wishlist) notFound();
+
+  // Access control: owner or invited email
+  const isOwner = wishlist.ownerId === session.user.id;
+  const isShared = wishlist.shares.some(
+    (s) => s.email === session.user?.email?.toLowerCase()
+  );
+  if (!isOwner && !isShared) notFound();
 
   const grouped = {
     MUST_HAVE: wishlist.items.filter((i) => i.category === "MUST_HAVE"),
     NICE_TO_HAVE: wishlist.items.filter((i) => i.category === "NICE_TO_HAVE"),
     DREAM_ITEM: wishlist.items.filter((i) => i.category === "DREAM_ITEM"),
   };
-
-  const shareUrl = `${process.env.NEXTAUTH_URL}/wishlist/${wishlist.id}`;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-purple-50">
@@ -55,7 +61,11 @@ export default async function WishlistPage({
           </div>
           <div className="flex items-center gap-2">
             <RefreshAllButton wishlistId={wishlist.id} />
-            <CopyShareButton url={shareUrl} />
+            <SharePanel
+              wishlistId={wishlist.id}
+              shares={wishlist.shares}
+              isOwner={isOwner}
+            />
           </div>
         </div>
       </header>
@@ -69,21 +79,5 @@ export default async function WishlistPage({
         />
       </main>
     </div>
-  );
-}
-
-function CopyShareButton({ url }: { url: string }) {
-  return (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={undefined}
-      className="text-xs"
-      // Handled client-side via a small inline script attr trick
-      data-share-url={url}
-      id="share-btn"
-    >
-      🔗 Share
-    </Button>
   );
 }
