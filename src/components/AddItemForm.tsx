@@ -1,19 +1,43 @@
 "use client";
 
-import { useState } from "react";
-import { addItem } from "@/actions/wishlist";
+import { useState, useRef } from "react";
+import { addItem, fetchUrlMetadata } from "@/actions/wishlist";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 export default function AddItemForm({ wishlistId }: { wishlistId: string }) {
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
+  const [fetching, setFetching] = useState(false);
+  const [imageUrl, setImageUrl] = useState("");
+  const [price, setPrice] = useState("");
+  const [name, setName] = useState("");
+  const formRef = useRef<HTMLFormElement>(null);
+
+  async function handleUrlBlur(e: React.FocusEvent<HTMLInputElement>) {
+    const url = e.target.value.trim();
+    if (!url || !url.startsWith("http")) return;
+
+    setFetching(true);
+    try {
+      const meta = await fetchUrlMetadata(url);
+      if (meta.image && !imageUrl) setImageUrl(meta.image);
+      if (meta.price && !price) setPrice(String(meta.price));
+      if (meta.title && !name) setName(meta.title.slice(0, 100));
+    } finally {
+      setFetching(false);
+    }
+  }
 
   async function handleSubmit(formData: FormData) {
     setPending(true);
     await addItem(wishlistId, formData);
     setPending(false);
     setOpen(false);
+    setImageUrl("");
+    setPrice("");
+    setName("");
+    formRef.current?.reset();
   }
 
   return (
@@ -26,11 +50,47 @@ export default function AddItemForm({ wishlistId }: { wishlistId: string }) {
       </div>
 
       {open && (
-        <form action={handleSubmit} className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Input name="name" placeholder="Product name *" required />
-          <Input name="sourceUrl" placeholder="Source URL" type="url" />
-          <Input name="price" placeholder="Price (e.g. 49.99)" type="number" step="0.01" min="0" />
-          <Input name="imageUrl" placeholder="Image URL" type="url" />
+        <form ref={formRef} action={handleSubmit} className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* Source URL first so we can auto-fill the rest */}
+          <div className="sm:col-span-2 relative">
+            <Input
+              name="sourceUrl"
+              placeholder="Source URL — paste to auto-fill name, image & price"
+              type="url"
+              onBlur={handleUrlBlur}
+            />
+            {fetching && (
+              <span className="absolute right-3 top-2 text-xs text-indigo-400 animate-pulse">
+                Fetching…
+              </span>
+            )}
+          </div>
+
+          <Input
+            name="name"
+            placeholder="Product name *"
+            required
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <Input
+            name="price"
+            placeholder="Price (e.g. 49.99)"
+            type="number"
+            step="0.01"
+            min="0"
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
+          />
+          <div className="sm:col-span-2">
+            <Input
+              name="imageUrl"
+              placeholder="Image URL (auto-filled or paste manually)"
+              type="url"
+              value={imageUrl}
+              onChange={(e) => setImageUrl(e.target.value)}
+            />
+          </div>
           <div className="sm:col-span-2">
             <select
               name="category"
@@ -42,8 +102,8 @@ export default function AddItemForm({ wishlistId }: { wishlistId: string }) {
               <option value="DREAM_ITEM">💭 Dream Item</option>
             </select>
           </div>
-          <Button type="submit" disabled={pending} className="sm:col-span-2">
-            {pending ? "Adding..." : "Add Item"}
+          <Button type="submit" disabled={pending || fetching} className="sm:col-span-2">
+            {pending ? "Adding…" : fetching ? "Fetching page data…" : "Add Item"}
           </Button>
         </form>
       )}
