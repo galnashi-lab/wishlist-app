@@ -13,11 +13,14 @@ import {
 } from "@/components/ui/dialog";
 import { Category } from "@prisma/client";
 
+const CURRENCIES = ["USD", "EUR", "GBP", "ILS", "JPY", "CAD", "AUD", "CHF", "CNY"];
+
 type Item = {
   id: string;
   name: string;
   sourceUrl: string | null;
   price: number | null;
+  currency: string | null;
   imageUrl: string | null;
   category: Category;
 };
@@ -37,6 +40,7 @@ export default function EditItemDialog({
   const router = useRouter();
   const [imageUrl, setImageUrl] = useState(item.imageUrl ?? "");
   const [price, setPrice] = useState(item.price != null ? String(item.price) : "");
+  const [currency, setCurrency] = useState(item.currency ?? "USD");
   const [name, setName] = useState(item.name);
 
   async function handleSubmit(formData: FormData) {
@@ -67,15 +71,28 @@ export default function EditItemDialog({
             type="url"
             defaultValue={item.sourceUrl ?? ""}
           />
-          <Input
-            name="price"
-            placeholder="Price (e.g. 49.99)"
-            type="number"
-            step="0.01"
-            min="0"
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-          />
+          <div className="flex gap-2">
+            <Input
+              name="price"
+              placeholder="Price"
+              type="number"
+              step="0.01"
+              min="0"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+              className="flex-1"
+            />
+            <select
+              name="currency"
+              value={currency}
+              onChange={(e) => setCurrency(e.target.value)}
+              className="w-24 border border-gray-200 rounded-md px-2 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+            >
+              {CURRENCIES.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </div>
           <Input
             name="imageUrl"
             placeholder="Image URL"

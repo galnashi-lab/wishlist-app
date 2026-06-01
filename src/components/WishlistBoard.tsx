@@ -12,11 +12,24 @@ import { Category } from "@prisma/client";
 import Image from "next/image";
 import EditItemDialog from "@/components/EditItemDialog";
 
+function formatPrice(price: number, currency: string | null): string {
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: currency ?? "USD",
+      maximumFractionDigits: 2,
+    }).format(price);
+  } catch {
+    return `${currency ?? "$"}${price.toFixed(2)}`;
+  }
+}
+
 type Item = {
   id: string;
   name: string;
   sourceUrl: string | null;
   price: number | null;
+  currency: string | null;
   imageUrl: string | null;
   category: Category;
   rank: number;
@@ -206,7 +219,9 @@ function DraggableItem({
                 ) : item.name}
               </p>
               {item.price != null && (
-                <p className="text-xs text-gray-400">${item.price.toFixed(2)}</p>
+                <p className="text-xs text-gray-400">
+                  {formatPrice(item.price, item.currency)}
+                </p>
               )}
             </div>
 

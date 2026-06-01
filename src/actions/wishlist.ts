@@ -51,6 +51,7 @@ export async function getWishlists() {
 export async function fetchUrlMetadata(url: string): Promise<{
   image: string | null;
   price: number | null;
+  currency: string | null;
   title: string | null;
 }> {
   try {
@@ -58,7 +59,7 @@ export async function fetchUrlMetadata(url: string): Promise<{
       signal: AbortSignal.timeout(8000),
       headers: { "User-Agent": "Mozilla/5.0 (compatible; WishlistBot/1.0)" },
     });
-    if (!res.ok) return { image: null, price: null, title: null };
+    if (!res.ok) return { image: null, price: null, currency: null, title: null };
 
     const html = await res.text();
 
@@ -72,41 +73,60 @@ export async function fetchUrlMetadata(url: string): Promise<{
       || html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim()
       || null;
 
-    // Extract price — try multiple strategies in order
     let price: number | null = null;
+    let currency: string | null = null;
 
-    // 1. Schema.org JSON-LD
+    // 1. Schema.org JSON-LD (most reliable)
     const jsonLdMatches = html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi);
     for (const match of jsonLdMatches) {
       try {
         const data = JSON.parse(match[1]);
         const offers = data?.offers ?? data?.["@graph"]?.find((g: { offers?: unknown }) => g.offers)?.offers;
-        const p = offers?.price ?? offers?.[0]?.price;
-        if (p !== undefined) { price = parseFloat(String(p)); break; }
+        const offer = Array.isArray(offers) ? offers[0] : offers;
+        const p = offer?.price;
+        const c = offer?.priceCurrency;
+        if (p !== undefined) { price = parseFloat(String(p)); }
+        if (c) { currency = String(c).toUpperCase(); }
+        if (price) break;
       } catch { /* skip */ }
     }
 
-    // 2. og:price:amount meta tag
+    // 2. og:price meta tags
     if (!price) {
       const ogPrice = html.match(/<meta[^>]+property=["']og:price:amount["'][^>]+content=["']([^"']+)["']/i)?.[1]
         || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:price:amount["']/i)?.[1];
       if (ogPrice) price = parseFloat(ogPrice);
     }
+    if (!currency) {
+      const ogCurrency = html.match(/<meta[^>]+property=["']og:price:currency["'][^>]+content=["']([^"']+)["']/i)?.[1]
+        || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:price:currency["']/i)?.[1];
+      if (ogCurrency) currency = ogCurrency.toUpperCase();
+    }
 
-    // 3. Common price patterns in HTML
+    // 3. Common HTML price patterns
     if (!price) {
       const priceMatch = html.match(/["']price["']\s*:\s*["']?([\d]+\.?\d{0,2})["']?/)
         || html.match(/class=["'][^"']*price[^"']*["'][^>]*>\s*[^\d]*([\d]+\.?\d{0,2})/i);
       if (priceMatch) price = parseFloat(priceMatch[1]);
     }
 
+    // 4. Infer currency from common symbols if still missing
+    if (price && !currency) {
+      if (html.match(/₪|ILS|shekel/i)) currency = "ILS";
+      else if (html.match(/€|EUR/i)) currency = "EUR";
+      else if (html.match(/£|GBP/i)) currency = "GBP";
+      else if (html.match(/¥|JPY|CNY/i)) currency = "JPY";
+      else currency = "USD"; // sensible default
+    }
+
     return {
       image: ogImage,
       price: price && !isNaN(price) ? price : null,
+      currency: price ? currency : null,
       title: ogTitle,
     };
   } catch {
-    return { image: null, price: null, title: null };
+    return { image: null, price: null, currency: null, title: null };
   }
 }
 
@@ -138,6 +158,7 @@ export async function addItem(wishlistId: string, formData: FormData) {
   const name = formData.get("name") as string;
   const sourceUrl = formData.get("sourceUrl") as string;
   const price = formData.get("price") ? parseFloat(formData.get("price") as string) : null;
+  const currency = (formData.get("currency") as string)?.trim().toUpperCase() || null;
   const imageUrlInput = formData.get("imageUrl") as string;
   const category = (formData.get("category") as Category) || "NICE_TO_HAVE";
 
@@ -158,6 +179,7 @@ export async function addItem(wishlistId: string, formData: FormData) {
       name: name.trim(),
       sourceUrl: sourceUrl?.trim() || null,
       price,
+      currency: price ? currency : null,
       imageUrl,
       category,
       rank: (maxRankItem?.rank ?? -1) + 1,
@@ -174,12 +196,12 @@ export async function updateItem(itemId: string, wishlistId: string, formData: F
   const name = formData.get("name") as string;
   const sourceUrl = formData.get("sourceUrl") as string;
   const price = formData.get("price") ? parseFloat(formData.get("price") as string) : null;
+  const currency = (formData.get("currency") as string)?.trim().toUpperCase() || null;
   const imageUrlInput = formData.get("imageUrl") as string;
   const category = formData.get("category") as Category;
 
   if (!name?.trim()) throw new Error("Item name is required");
 
-  // Only re-download image if it changed (starts with http)
   let imageUrl: string | null = imageUrlInput?.trim() || null;
   if (imageUrl?.startsWith("http")) {
     imageUrl = await downloadImage(imageUrl) ?? imageUrl;
@@ -191,6 +213,7 @@ export async function updateItem(itemId: string, wishlistId: string, formData: F
       name: name.trim(),
       sourceUrl: sourceUrl?.trim() || null,
       price,
+      currency: price ? currency : null,
       imageUrl,
       category,
     },

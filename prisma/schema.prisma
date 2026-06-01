@@ -73,6 +73,7 @@ model Item {
   imageUrl      String?  @db.Text
   category      Category @default(NICE_TO_HAVE)
   rank          Int      @default(0)
+  currency      String?
   isPurchased   Boolean  @default(false)
   wishlistId    String
   wishlist      Wishlist @relation(fields: [wishlistId], references: [id], onDelete: Cascade)
