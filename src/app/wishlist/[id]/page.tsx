@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import AddItemForm from "@/components/AddItemForm";
 import WishlistBoard from "@/components/WishlistBoard";
+import RefreshAllButton from "@/components/RefreshAllButton";
 import { Category } from "@prisma/client";
 
 const CATEGORY_LABELS: Record<Category, string> = {
@@ -52,7 +53,10 @@ export default async function WishlistPage({
             <h1 className="text-xl font-bold text-gray-800">{wishlist.name}</h1>
             <span className="text-sm text-gray-400">by {wishlist.owner.name}</span>
           </div>
-          <CopyShareButton url={shareUrl} />
+          <div className="flex items-center gap-2">
+            <RefreshAllButton wishlistId={wishlist.id} />
+            <CopyShareButton url={shareUrl} />
+          </div>
         </div>
       </header>
 

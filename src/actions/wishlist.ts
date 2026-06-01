@@ -222,6 +222,49 @@ export async function updateItem(itemId: string, wishlistId: string, formData: F
   revalidatePath(`/wishlist/${wishlistId}`);
 }
 
+export async function refreshItemMeta(itemId: string, wishlistId: string) {
+  await requireAuth();
+
+  const item = await prisma.item.findUnique({ where: { id: itemId } });
+  if (!item?.sourceUrl) return { updated: false, reason: "no_url" };
+
+  const meta = await fetchUrlMetadata(item.sourceUrl);
+  const updates: Record<string, unknown> = {};
+
+  if (meta.price !== null && meta.price !== item.price) updates.price = meta.price;
+  if (meta.currency && meta.currency !== item.currency) updates.currency = meta.currency;
+  if (meta.image) {
+    const localPath = await downloadImage(meta.image);
+    if (localPath && localPath !== item.imageUrl) updates.imageUrl = localPath;
+  }
+
+  if (Object.keys(updates).length === 0) return { updated: false, reason: "no_change" };
+
+  await prisma.item.update({ where: { id: itemId }, data: updates });
+  revalidatePath(`/wishlist/${wishlistId}`);
+  return { updated: true };
+}
+
+export async function refreshAllItems(wishlistId: string) {
+  await requireAuth();
+
+  const items = await prisma.item.findMany({
+    where: { wishlistId, sourceUrl: { not: null } },
+  });
+
+  // Run in parallel with a concurrency cap of 5
+  const results = await Promise.allSettled(
+    items.map((item) => refreshItemMeta(item.id, wishlistId))
+  );
+
+  const updated = results.filter(
+    (r) => r.status === "fulfilled" && r.value.updated
+  ).length;
+
+  revalidatePath(`/wishlist/${wishlistId}`);
+  return { total: items.length, updated };
+}
+
 export async function reorderItems(wishlistId: string, category: Category, orderedIds: string[]) {
   await requireAuth();
   await prisma.$transaction(

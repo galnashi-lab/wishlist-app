@@ -1,13 +1,14 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import {
   DragDropContext,
   Droppable,
   Draggable,
   DropResult,
 } from "@hello-pangea/dnd";
-import { reorderItems, togglePurchased } from "@/actions/wishlist";
+import { reorderItems, togglePurchased, refreshItemMeta } from "@/actions/wishlist";
 import { Category } from "@prisma/client";
 import Image from "next/image";
 import EditItemDialog from "@/components/EditItemDialog";
@@ -162,13 +163,28 @@ function DraggableItem({
   onToggle: (itemId: string, purchased: boolean) => void;
 }) {
   const [purchasing, setPurchasing] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshed, setRefreshed] = useState<boolean | null>(null);
   const [editOpen, setEditOpen] = useState(false);
+  const router = useRouter();
 
   async function handleToggle() {
     setPurchasing(true);
     onToggle(item.id, !item.isPurchased);
     await togglePurchased(item.id, wishlistId);
     setPurchasing(false);
+  }
+
+  async function handleRefresh() {
+    if (!item.sourceUrl) return;
+    setRefreshing(true);
+    setRefreshed(null);
+    const result = await refreshItemMeta(item.id, wishlistId);
+    setRefreshing(false);
+    setRefreshed(result.updated);
+    if (result.updated) router.refresh();
+    // Reset the feedback icon after 2s
+    setTimeout(() => setRefreshed(null), 2000);
   }
 
   return (
@@ -224,6 +240,24 @@ function DraggableItem({
                 </p>
               )}
             </div>
+
+            {/* Refresh button — only if item has a source URL */}
+            {item.sourceUrl && (
+              <button
+                onClick={handleRefresh}
+                disabled={refreshing}
+                title="Re-fetch price & image from source URL"
+                className={`shrink-0 text-xs px-2 py-1 rounded-full border transition-colors ${
+                  refreshed === true
+                    ? "border-green-300 text-green-600"
+                    : refreshed === false
+                    ? "border-gray-200 text-gray-300"
+                    : "border-gray-200 text-gray-400 hover:border-indigo-300 hover:text-indigo-500"
+                }`}
+              >
+                {refreshing ? "⟳" : refreshed === true ? "✓" : refreshed === false ? "–" : "↻"}
+              </button>
+            )}
 
             {/* Edit button */}
             <button
