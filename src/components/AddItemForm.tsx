@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { addItem, fetchUrlMetadata } from "@/actions/wishlist";
 import { Button } from "@/components/ui/button";
@@ -12,26 +12,37 @@ export default function AddItemForm({ wishlistId }: { wishlistId: string }) {
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [fetching, setFetching] = useState(false);
+  const [sourceUrl, setSourceUrl] = useState("");
   const [imageUrl, setImageUrl] = useState("");
   const [price, setPrice] = useState("");
   const [currency, setCurrency] = useState("USD");
   const [name, setName] = useState("");
   const formRef = useRef<HTMLFormElement>(null);
+  const fetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const router = useRouter();
 
-  async function handleUrlBlur(e: React.FocusEvent<HTMLInputElement>) {
-    const url = e.target.value.trim();
-    if (!url || !url.startsWith("http")) return;
-    setFetching(true);
-    try {
-      const meta = await fetchUrlMetadata(url);
-      if (meta.image && !imageUrl) setImageUrl(meta.image);
-      if (meta.price && !price) setPrice(String(meta.price));
-      if (meta.currency) setCurrency(meta.currency);
-      if (meta.title && !name) setName(meta.title.slice(0, 100));
-    } finally {
-      setFetching(false);
-    }
+  // Auto-fetch when a valid URL is entered (debounced 800ms)
+  useEffect(() => {
+    if (fetchTimer.current) clearTimeout(fetchTimer.current);
+    if (!sourceUrl.startsWith("http")) return;
+    fetchTimer.current = setTimeout(async () => {
+      setFetching(true);
+      try {
+        const meta = await fetchUrlMetadata(sourceUrl);
+        if (meta.image) setImageUrl(meta.image);
+        if (meta.price) setPrice(String(meta.price));
+        if (meta.currency) setCurrency(meta.currency);
+        if (meta.title) setName(meta.title.slice(0, 100));
+      } finally {
+        setFetching(false);
+      }
+    }, 800);
+    return () => { if (fetchTimer.current) clearTimeout(fetchTimer.current); };
+  }, [sourceUrl]);
+
+  function reset() {
+    setSourceUrl(""); setImageUrl(""); setPrice(""); setCurrency("USD"); setName("");
+    formRef.current?.reset();
   }
 
   async function handleSubmit(formData: FormData) {
@@ -39,11 +50,7 @@ export default function AddItemForm({ wishlistId }: { wishlistId: string }) {
     await addItem(wishlistId, formData);
     setPending(false);
     setOpen(false);
-    setImageUrl("");
-    setPrice("");
-    setCurrency("USD");
-    setName("");
-    formRef.current?.reset();
+    reset();
     router.refresh();
   }
 
@@ -51,19 +58,21 @@ export default function AddItemForm({ wishlistId }: { wishlistId: string }) {
     <div className="bg-white rounded-xl shadow p-4">
       <div className="flex items-center justify-between">
         <h2 className="font-semibold text-gray-700">Add a new item</h2>
-        <Button size="sm" variant="ghost" onClick={() => setOpen(!open)}>
+        <Button size="sm" variant="ghost" onClick={() => { setOpen(!open); if (open) reset(); }}>
           {open ? "Cancel" : "+ Add Item"}
         </Button>
       </div>
 
       {open && (
         <form ref={formRef} action={handleSubmit} className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* Source URL — triggers auto-fill */}
           <div className="sm:col-span-2 relative">
             <Input
               name="sourceUrl"
-              placeholder="Source URL — paste to auto-fill name, image & price"
+              placeholder="Paste product URL to auto-fill details…"
               type="url"
-              onBlur={handleUrlBlur}
+              value={sourceUrl}
+              onChange={(e) => setSourceUrl(e.target.value)}
             />
             {fetching && (
               <span className="absolute right-3 top-2 text-xs text-indigo-400 animate-pulse">
@@ -80,7 +89,6 @@ export default function AddItemForm({ wishlistId }: { wishlistId: string }) {
             onChange={(e) => setName(e.target.value)}
           />
 
-          {/* Price + Currency side by side */}
           <div className="flex gap-2">
             <Input
               name="price"
@@ -98,9 +106,7 @@ export default function AddItemForm({ wishlistId }: { wishlistId: string }) {
               onChange={(e) => setCurrency(e.target.value)}
               className="w-24 border border-gray-200 rounded-md px-2 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-300"
             >
-              {CURRENCIES.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
+              {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
 
@@ -113,6 +119,7 @@ export default function AddItemForm({ wishlistId }: { wishlistId: string }) {
               onChange={(e) => setImageUrl(e.target.value)}
             />
           </div>
+
           <div className="sm:col-span-2">
             <select
               name="category"
@@ -124,6 +131,7 @@ export default function AddItemForm({ wishlistId }: { wishlistId: string }) {
               <option value="DREAM_ITEM">💭 Dream Item</option>
             </select>
           </div>
+
           <Button type="submit" disabled={pending || fetching} className="sm:col-span-2">
             {pending ? "Adding…" : fetching ? "Fetching page data…" : "Add Item"}
           </Button>

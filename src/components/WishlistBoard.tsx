@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, useCallback } from "react";
+import { useState, useTransition, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   DragDropContext,
@@ -8,7 +8,7 @@ import {
   Draggable,
   DropResult,
 } from "@hello-pangea/dnd";
-import { reorderItems, togglePurchased, refreshItemMeta } from "@/actions/wishlist";
+import { reorderItems, togglePurchased, refreshItemMeta, deleteItem, moveItemToCategory } from "@/actions/wishlist";
 import { Category } from "@prisma/client";
 import Image from "next/image";
 import EditItemDialog from "@/components/EditItemDialog";
@@ -51,22 +51,40 @@ export default function WishlistBoard({
   const [items, setItems] = useState<Grouped>(grouped);
   const [, startTransition] = useTransition();
 
+  // Sync local state when server re-renders after router.refresh()
+  useEffect(() => {
+    setItems(grouped);
+  }, [grouped]);
+
   function onDragEnd(result: DropResult) {
     const { source, destination } = result;
     if (!destination) return;
     if (source.droppableId === destination.droppableId && source.index === destination.index) return;
 
-    const category = source.droppableId as Category;
-    if (category !== destination.droppableId) return;
+    const srcCat = source.droppableId as Category;
+    const dstCat = destination.droppableId as Category;
 
-    const newList = Array.from(items[category]);
-    const [moved] = newList.splice(source.index, 1);
-    newList.splice(destination.index, 0, moved);
-
-    setItems((prev) => ({ ...prev, [category]: newList }));
-    startTransition(() => {
-      reorderItems(wishlistId, category, newList.map((i) => i.id));
-    });
+    if (srcCat === dstCat) {
+      // Reorder within same category
+      const newList = Array.from(items[srcCat]);
+      const [moved] = newList.splice(source.index, 1);
+      newList.splice(destination.index, 0, moved);
+      setItems((prev) => ({ ...prev, [srcCat]: newList }));
+      startTransition(() => {
+        reorderItems(wishlistId, srcCat, newList.map((i) => i.id));
+      });
+    } else {
+      // Move across categories
+      const srcList = Array.from(items[srcCat]);
+      const dstList = Array.from(items[dstCat]);
+      const [moved] = srcList.splice(source.index, 1);
+      const updated = { ...moved, category: dstCat };
+      dstList.splice(destination.index, 0, updated);
+      setItems((prev) => ({ ...prev, [srcCat]: srcList, [dstCat]: dstList }));
+      startTransition(() => {
+        moveItemToCategory(moved.id, wishlistId, dstCat, destination.index);
+      });
+    }
   }
 
   return (
@@ -79,20 +97,10 @@ export default function WishlistBoard({
             label={categoryLabels[cat]}
             items={items[cat]}
             wishlistId={wishlistId}
-            onItemUpdated={(updatedItem) => {
+            onDelete={(itemId) => {
               setItems((prev) => ({
                 ...prev,
-                // Remove from old category, add to new if changed
-                ...Object.fromEntries(
-                  (Object.keys(prev) as Category[]).map((c) => [
-                    c,
-                    c === updatedItem.category
-                      ? prev[c].some((i) => i.id === updatedItem.id)
-                        ? prev[c].map((i) => i.id === updatedItem.id ? updatedItem : i)
-                        : [...prev[c], updatedItem]
-                      : prev[c].filter((i) => i.id !== updatedItem.id),
-                  ])
-                ),
+                [cat]: prev[cat].filter((i) => i.id !== itemId),
               }));
             }}
             onToggle={(itemId, purchased) => {
@@ -111,13 +119,13 @@ export default function WishlistBoard({
 }
 
 function CategoryColumn({
-  category, label, items, wishlistId, onItemUpdated, onToggle,
+  category, label, items, wishlistId, onDelete, onToggle,
 }: {
   category: Category;
   label: string;
   items: Item[];
   wishlistId: string;
-  onItemUpdated: (item: Item) => void;
+  onDelete: (itemId: string) => void;
   onToggle: (itemId: string, purchased: boolean) => void;
 }) {
   return (
@@ -129,11 +137,13 @@ function CategoryColumn({
         </span>
       </h3>
       <Droppable droppableId={category}>
-        {(provided) => (
+        {(provided, snapshot) => (
           <div
             ref={provided.innerRef}
             {...provided.droppableProps}
-            className="space-y-2 min-h-[48px]"
+            className={`space-y-2 min-h-[48px] rounded-lg transition-colors ${
+              snapshot.isDraggingOver ? "bg-indigo-50" : ""
+            }`}
           >
             {items.map((item, index) => (
               <DraggableItem
@@ -141,7 +151,7 @@ function CategoryColumn({
                 item={item}
                 index={index}
                 wishlistId={wishlistId}
-                onItemUpdated={onItemUpdated}
+                onDelete={onDelete}
                 onToggle={onToggle}
               />
             ))}
@@ -154,17 +164,18 @@ function CategoryColumn({
 }
 
 function DraggableItem({
-  item, index, wishlistId, onItemUpdated, onToggle,
+  item, index, wishlistId, onDelete, onToggle,
 }: {
   item: Item;
   index: number;
   wishlistId: string;
-  onItemUpdated: (item: Item) => void;
+  onDelete: (itemId: string) => void;
   onToggle: (itemId: string, purchased: boolean) => void;
 }) {
   const [purchasing, setPurchasing] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshed, setRefreshed] = useState<boolean | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const router = useRouter();
 
@@ -183,8 +194,14 @@ function DraggableItem({
     setRefreshing(false);
     setRefreshed(result.updated);
     if (result.updated) router.refresh();
-    // Reset the feedback icon after 2s
     setTimeout(() => setRefreshed(null), 2000);
+  }
+
+  async function handleDelete() {
+    if (!confirm(`Remove "${item.name}"?`)) return;
+    setDeleting(true);
+    onDelete(item.id);
+    await deleteItem(item.id, wishlistId);
   }
 
   return (
@@ -194,7 +211,6 @@ function DraggableItem({
           <div
             ref={provided.innerRef}
             {...provided.draggableProps}
-            {...provided.dragHandleProps}
             className={`flex items-center gap-3 p-3 rounded-lg border transition-all ${
               item.isPurchased
                 ? "bg-gray-50 border-gray-100 opacity-60"
@@ -207,7 +223,9 @@ function DraggableItem({
             </span>
 
             {/* Drag handle */}
-            <span className="text-gray-300 cursor-grab shrink-0">⠿</span>
+            <span {...provided.dragHandleProps} className="text-gray-300 cursor-grab shrink-0 touch-none">
+              ⠿
+            </span>
 
             {/* Image */}
             <div className="w-10 h-10 rounded bg-gray-100 shrink-0 overflow-hidden relative">
@@ -235,36 +253,42 @@ function DraggableItem({
                 ) : item.name}
               </p>
               {item.price != null && (
-                <p className="text-xs text-gray-400">
-                  {formatPrice(item.price, item.currency)}
-                </p>
+                <p className="text-xs text-gray-400">{formatPrice(item.price, item.currency)}</p>
               )}
             </div>
 
-            {/* Refresh button — only if item has a source URL */}
+            {/* Refresh */}
             {item.sourceUrl && (
               <button
                 onClick={handleRefresh}
                 disabled={refreshing}
                 title="Re-fetch price & image from source URL"
                 className={`shrink-0 text-xs px-2 py-1 rounded-full border transition-colors ${
-                  refreshed === true
-                    ? "border-green-300 text-green-600"
-                    : refreshed === false
-                    ? "border-gray-200 text-gray-300"
-                    : "border-gray-200 text-gray-400 hover:border-indigo-300 hover:text-indigo-500"
+                  refreshed === true ? "border-green-300 text-green-600"
+                  : refreshed === false ? "border-gray-200 text-gray-300"
+                  : "border-gray-200 text-gray-400 hover:border-indigo-300 hover:text-indigo-500"
                 }`}
               >
                 {refreshing ? "⟳" : refreshed === true ? "✓" : refreshed === false ? "–" : "↻"}
               </button>
             )}
 
-            {/* Edit button */}
+            {/* Edit */}
             <button
               onClick={() => setEditOpen(true)}
               className="shrink-0 text-xs px-2 py-1 rounded-full border border-gray-200 text-gray-400 hover:border-indigo-300 hover:text-indigo-500 transition-colors"
             >
               ✏️
+            </button>
+
+            {/* Delete */}
+            <button
+              onClick={handleDelete}
+              disabled={deleting}
+              title="Remove item"
+              className="shrink-0 text-xs px-2 py-1 rounded-full border border-gray-200 text-gray-400 hover:border-red-300 hover:text-red-500 transition-colors"
+            >
+              🗑
             </button>
 
             {/* Purchased toggle */}

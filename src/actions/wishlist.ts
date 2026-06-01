@@ -54,79 +54,119 @@ export async function fetchUrlMetadata(url: string): Promise<{
   currency: string | null;
   title: string | null;
 }> {
+  const empty = { image: null, price: null, currency: null, title: null };
   try {
+    // Try direct fetch first, then microlink as fallback for image
     const res = await fetch(url, {
       signal: AbortSignal.timeout(8000),
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; WishlistBot/1.0)" },
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+      },
     });
-    if (!res.ok) return { image: null, price: null, currency: null, title: null };
-
+    if (!res.ok) return empty;
     const html = await res.text();
 
-    // Extract og:image
-    const ogImage = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)?.[1]
-      || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)?.[1]
-      || null;
+    // ── Title ──────────────────────────────────────────────────────────────
+    const title =
+      html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
+      html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)?.[1] ||
+      html.match(/<meta[^>]+name=["']twitter:title["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
+      html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim() ||
+      null;
 
-    // Extract og:title or <title>
-    const ogTitle = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1]
-      || html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim()
-      || null;
+    // ── Image — 5 fallback layers ───────────────────────────────────────
+    let image: string | null =
+      // 1. og:image (both attribute orders)
+      html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
+      html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)?.[1] ||
+      // 2. og:image:url variant
+      html.match(/<meta[^>]+property=["']og:image:url["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
+      // 3. twitter:image
+      html.match(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
+      html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image["']/i)?.[1] ||
+      // 4. link rel=image_src
+      html.match(/<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i)?.[1] ||
+      null;
 
+    // 5. Microlink API fallback for image (free tier, no key needed)
+    if (!image) {
+      try {
+        const ml = await fetch(`https://api.microlink.io/?url=${encodeURIComponent(url)}&screenshot=false`, {
+          signal: AbortSignal.timeout(5000),
+        });
+        if (ml.ok) {
+          const data = await ml.json();
+          image = data?.data?.image?.url || data?.data?.logo?.url || null;
+        }
+      } catch { /* skip */ }
+    }
+
+    // Make relative image URLs absolute
+    if (image && !image.startsWith("http")) {
+      const base = new URL(url);
+      image = new URL(image, base.origin).toString();
+    }
+
+    // ── Price & Currency ────────────────────────────────────────────────
     let price: number | null = null;
     let currency: string | null = null;
 
-    // 1. Schema.org JSON-LD (most reliable)
-    const jsonLdMatches = html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi);
-    for (const match of jsonLdMatches) {
+    // 1. Schema.org JSON-LD
+    for (const match of html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
       try {
         const data = JSON.parse(match[1]);
-        const offers = data?.offers ?? data?.["@graph"]?.find((g: { offers?: unknown }) => g.offers)?.offers;
-        const offer = Array.isArray(offers) ? offers[0] : offers;
-        const p = offer?.price;
-        const c = offer?.priceCurrency;
-        if (p !== undefined) { price = parseFloat(String(p)); }
-        if (c) { currency = String(c).toUpperCase(); }
+        const graph = data?.["@graph"] ?? (Array.isArray(data) ? data : [data]);
+        for (const node of graph) {
+          const offers = node?.offers;
+          const offer = Array.isArray(offers) ? offers[0] : offers;
+          if (offer?.price !== undefined) {
+            price = parseFloat(String(offer.price));
+            if (offer.priceCurrency) currency = String(offer.priceCurrency).toUpperCase();
+            break;
+          }
+        }
         if (price) break;
       } catch { /* skip */ }
     }
 
     // 2. og:price meta tags
     if (!price) {
-      const ogPrice = html.match(/<meta[^>]+property=["']og:price:amount["'][^>]+content=["']([^"']+)["']/i)?.[1]
-        || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:price:amount["']/i)?.[1];
+      const ogPrice =
+        html.match(/<meta[^>]+property=["']og:price:amount["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
+        html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:price:amount["']/i)?.[1];
       if (ogPrice) price = parseFloat(ogPrice);
-    }
-    if (!currency) {
-      const ogCurrency = html.match(/<meta[^>]+property=["']og:price:currency["'][^>]+content=["']([^"']+)["']/i)?.[1]
-        || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:price:currency["']/i)?.[1];
-      if (ogCurrency) currency = ogCurrency.toUpperCase();
+      const ogCur =
+        html.match(/<meta[^>]+property=["']og:price:currency["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
+        html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:price:currency["']/i)?.[1];
+      if (ogCur) currency = ogCur.toUpperCase();
     }
 
-    // 3. Common HTML price patterns
+    // 3. Inline JSON price
     if (!price) {
-      const priceMatch = html.match(/["']price["']\s*:\s*["']?([\d]+\.?\d{0,2})["']?/)
-        || html.match(/class=["'][^"']*price[^"']*["'][^>]*>\s*[^\d]*([\d]+\.?\d{0,2})/i);
-      if (priceMatch) price = parseFloat(priceMatch[1]);
+      const m = html.match(/"price"\s*:\s*"?([\d]+\.?\d{0,2})"?/) ||
+        html.match(/class=["'][^"']*price[^"']*["'][^>]*>\s*[^\d]*([\d]+\.?\d{0,2})/i);
+      if (m) price = parseFloat(m[1]);
     }
 
-    // 4. Infer currency from common symbols if still missing
+    // 4. Infer currency from symbols
     if (price && !currency) {
       if (html.match(/₪|ILS|shekel/i)) currency = "ILS";
-      else if (html.match(/€|EUR/i)) currency = "EUR";
-      else if (html.match(/£|GBP/i)) currency = "GBP";
-      else if (html.match(/¥|JPY|CNY/i)) currency = "JPY";
-      else currency = "USD"; // sensible default
+      else if (html.match(/€|EUR/)) currency = "EUR";
+      else if (html.match(/£|GBP/)) currency = "GBP";
+      else if (html.match(/¥|JPY|CNY/)) currency = "JPY";
+      else currency = "USD";
     }
 
     return {
-      image: ogImage,
+      image,
       price: price && !isNaN(price) ? price : null,
       currency: price ? currency : null,
-      title: ogTitle,
+      title,
     };
   } catch {
-    return { image: null, price: null, currency: null, title: null };
+    return empty;
   }
 }
 
@@ -263,6 +303,36 @@ export async function refreshAllItems(wishlistId: string) {
 
   revalidatePath(`/wishlist/${wishlistId}`);
   return { total: items.length, updated };
+}
+
+export async function deleteItem(itemId: string, wishlistId: string) {
+  await requireAuth();
+  await prisma.item.delete({ where: { id: itemId } });
+  revalidatePath(`/wishlist/${wishlistId}`);
+}
+
+export async function moveItemToCategory(
+  itemId: string,
+  wishlistId: string,
+  newCategory: Category,
+  newIndex: number
+) {
+  await requireAuth();
+  // Shift existing items in target category to make room
+  const siblings = await prisma.item.findMany({
+    where: { wishlistId, category: newCategory, id: { not: itemId } },
+    orderBy: { rank: "asc" },
+  });
+  siblings.splice(newIndex, 0, { id: itemId } as typeof siblings[0]);
+  await prisma.$transaction([
+    prisma.item.update({ where: { id: itemId }, data: { category: newCategory, rank: newIndex } }),
+    ...siblings
+      .filter((s) => s.id !== itemId)
+      .map((s, i) =>
+        prisma.item.update({ where: { id: s.id }, data: { rank: i >= newIndex ? i + 1 : i } })
+      ),
+  ]);
+  revalidatePath(`/wishlist/${wishlistId}`);
 }
 
 export async function reorderItems(wishlistId: string, category: Category, orderedIds: string[]) {
