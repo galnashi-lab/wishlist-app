@@ -16,14 +16,14 @@ const CATEGORY_LABELS: Record<Category, string> = {
 export default async function WishlistPage({
   params,
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }) {
-  console.log('WishlistPage :', params.id);
+  const { id } = await params;
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
 
   const wishlist = await prisma.wishlist.findUnique({
-    where: { id: params.id },
+    where: { id },
     include: {
       items: { orderBy: { rank: "asc" } },
       owner: { select: { name: true } },
