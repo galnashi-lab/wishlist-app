@@ -14,12 +14,28 @@ async function requireAuth() {
   return session.user;
 }
 
+// Ensure user exists in DB (upsert on first use)
+async function ensureUser(user: { id?: string | null; name?: string | null; email?: string | null; image?: string | null }) {
+  if (!user.id) return;
+  return prisma.user.upsert({
+    where: { id: user.id },
+    update: {},
+    create: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      image: user.image,
+    },
+  });
+}
+
 // ─── Wishlists ────────────────────────────────────────────────────────────────
 
 export async function createWishlist(formData: FormData) {
   const user = await requireAuth();
-  const name = formData.get("name") as string;
+  await ensureUser(user);
 
+  const name = formData.get("name") as string;
   if (!name?.trim()) throw new Error("Name is required");
 
   const wishlist = await prisma.wishlist.create({
@@ -61,8 +77,8 @@ async function downloadImage(imageUrl: string): Promise<string | null> {
 
 export async function addItem(wishlistId: string, formData: FormData) {
   const user = await requireAuth();
+  await ensureUser(user);
 
-  // Verify ownership or access
   const wishlist = await prisma.wishlist.findUnique({ where: { id: wishlistId } });
   if (!wishlist) throw new Error("Wishlist not found");
 
@@ -74,13 +90,11 @@ export async function addItem(wishlistId: string, formData: FormData) {
 
   if (!name?.trim()) throw new Error("Item name is required");
 
-  // Download image to local storage
   let imageUrl: string | null = null;
   if (imageUrlInput?.trim()) {
     imageUrl = await downloadImage(imageUrlInput.trim());
   }
 
-  // Get max rank in this category for this wishlist
   const maxRankItem = await prisma.item.findFirst({
     where: { wishlistId, category },
     orderBy: { rank: "desc" },
@@ -102,11 +116,7 @@ export async function addItem(wishlistId: string, formData: FormData) {
   revalidatePath(`/wishlist/${wishlistId}`);
 }
 
-export async function reorderItems(
-  wishlistId: string,
-  category: Category,
-  orderedIds: string[]
-) {
+export async function reorderItems(wishlistId: string, category: Category, orderedIds: string[]) {
   await requireAuth();
 
   await prisma.$transaction(
@@ -120,8 +130,8 @@ export async function reorderItems(
 
 export async function togglePurchased(itemId: string, wishlistId: string) {
   const user = await requireAuth();
+  await ensureUser(user);
 
-  // Atomic update: only mark as purchased if not already purchased
   await prisma.$transaction(async (tx) => {
     const item = await tx.item.findUnique({ where: { id: itemId } });
     if (!item) throw new Error("Item not found");
