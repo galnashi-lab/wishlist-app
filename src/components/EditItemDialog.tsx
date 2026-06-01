@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { updateItem } from "@/actions/wishlist";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,6 +34,7 @@ export default function EditItemDialog({
   onClose: () => void;
 }) {
   const [pending, setPending] = useState(false);
+  const router = useRouter();
   const [imageUrl, setImageUrl] = useState(item.imageUrl ?? "");
   const [price, setPrice] = useState(item.price != null ? String(item.price) : "");
   const [name, setName] = useState(item.name);
@@ -42,6 +44,7 @@ export default function EditItemDialog({
     await updateItem(item.id, wishlistId, formData);
     setPending(false);
     onClose();
+    router.refresh();
   }
 
   return (

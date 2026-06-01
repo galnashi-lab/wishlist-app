@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { addItem, fetchUrlMetadata } from "@/actions/wishlist";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,6 +14,7 @@ export default function AddItemForm({ wishlistId }: { wishlistId: string }) {
   const [price, setPrice] = useState("");
   const [name, setName] = useState("");
   const formRef = useRef<HTMLFormElement>(null);
+  const router = useRouter();
 
   async function handleUrlBlur(e: React.FocusEvent<HTMLInputElement>) {
     const url = e.target.value.trim();
@@ -38,6 +40,7 @@ export default function AddItemForm({ wishlistId }: { wishlistId: string }) {
     setPrice("");
     setName("");
     formRef.current?.reset();
+    router.refresh();
   }
 
   return (
